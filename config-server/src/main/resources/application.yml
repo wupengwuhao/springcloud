@@ -1,0 +1,9 @@
+server:
+  port: 7075
+spring:
+  application:
+    name: config-server
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://10.31.0.234:7070/eureka/
