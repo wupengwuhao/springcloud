@@ -8,4 +8,4 @@ eureka:
     registerWithEureka: false
     fetchRegistry: false
     serviceUrl:
-      defaultZone: http://10.31.0.234:7070/eureka/
+      defaultZone: http://discovery.springcloudservice.com:7070/eureka/
