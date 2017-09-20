@@ -7,3 +7,14 @@ eureka:
   client:
     serviceUrl:
       defaultZone: http://10.31.0.234:7070/eureka/
+spring:
+  cloud:
+    config:
+      label: master
+      server:
+        git:
+          uri: https://github.com/wupengwuhao/springcloud
+          searchPaths: config-respo
+
+
+
