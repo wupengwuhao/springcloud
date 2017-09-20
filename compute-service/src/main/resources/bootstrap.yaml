@@ -5,4 +5,10 @@ spring:
     config:
       label: master
       profile: dev
-      uri: http://10.31.0.234:7075/
+      discovery:
+        enabled: true
+        serviceId: config-server
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://10.31.0.234:7070/eureka/

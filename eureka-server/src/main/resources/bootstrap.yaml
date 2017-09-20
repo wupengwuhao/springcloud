@@ -1,8 +1,0 @@
-spring:
-  application:
-    name: eureka-server
-  cloud:
-    config:
-      label: master
-      profile: dev
-      uri: http://10.31.0.234:7075/
