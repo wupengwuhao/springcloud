@@ -1,4 +1,4 @@
-package com.kyexpress.ec.item.provider.utils;
+package com.kyexpress.ec.cache;
 
 import com.kyexpress.ec.item.api.CacheKey;
 import com.kyexpress.framework.cache.CacheUtils;
@@ -63,16 +63,17 @@ public class ECCacheAspect {
             }
         }
 
+        method.getParameterAnnotations();
+
+
         Map<Class<?>, Set<String>> tableCacheKey = getTableCacheKey(cache);
 
         Map<Class<?>, Set<String>> tableRowKeys = new HashMap<>();
         Object[] args = joinPoint.getArgs();
-        for (Object arg : args) {
+        for (Class<?> cacheClass : cache.value()) {
             Set<String> rowKeys = new HashSet<>();
-            Class<?> cacheClass = null;
-            for (Class<?> tmpCacheClass : cache.value()) {
-                cacheClass = tmpCacheClass;
-                rowKeys.addAll(fetchFieldValueList(arg, tmpCacheClass, tableCacheKey, byIdMethodFlag));
+            for (Object arg : args) {
+                rowKeys.addAll(fetchFieldValueList(arg, cacheClass, tableCacheKey, byIdMethodFlag));
             }
             if(rowKeys.size() > 0) {
                 tableRowKeys.put(cacheClass, rowKeys);
@@ -130,7 +131,7 @@ public class ECCacheAspect {
             }
             return rowKeys;
         } else if (Number.class.isAssignableFrom(arg.getClass())) {
-            if(byIdMethodFlag) {
+            if(byIdMethodFlag && cacheField.contains("id")) {
                 rowKeys.add("id" + "_" + arg);
             }
         } else if (arg.getClass().isArray()) {
