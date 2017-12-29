@@ -1,16 +1,16 @@
 package com.wuhao.sc.cache;
 
-import com.kyexpress.ec.item.api.CacheKey;
-import com.kyexpress.framework.cache.CacheUtils;
-import com.kyexpress.framework.model.GenericModel;
-import com.kyexpress.framework.utils.EncryptUtils;
+import com.wuhao.sc.redis.RedisUtils;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.aspectj.lang.annotation.Pointcut;
 import org.aspectj.lang.reflect.MethodSignature;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.*;
@@ -19,18 +19,17 @@ import java.util.*;
 @Component
 public class ECCacheAspect {
 
+    private Logger logger = LoggerFactory.getLogger(ECCacheAspect.class);
+
     static String[] updateMethodPres = new String[] { "insert", "add", "update", "edit", "delete", "remove", "disable", "enable" };
 
     static String[] byIdMethod = new String[] { "get", "getByIds", "disable", "enable" };
 
-//    @Pointcut("within(com.kyexpress.ec..*) && @within(org.springframework.web.bind.annotation.RestController) && execution(public * *(..))")
-    public void controller() {
-    }
+    private String TABLE_VERSION_KEY = "tableVersion";
 
-    @Pointcut("within(com.kyexpress..*) && this(com.kyexpress.framework.service.GenericService) && execution(public * *(..))")
+    @Pointcut("this(com.wuhao.sc.cache.CacheEnable) && execution(public * *(..))")
     public void service() {
     }
-
     @Around("service()")
     public Object cache(ProceedingJoinPoint joinPoint) throws Throwable {
         MethodSignature methodSignature = (MethodSignature) joinPoint.getSignature();
@@ -41,7 +40,7 @@ public class ECCacheAspect {
             cache = clazz.getAnnotation(ECCache.class);
         }
 //        System.out.println("-----------------------------");
-        System.out.println(clazz.getName() + "  " + method.getName());
+//        System.out.println(clazz.getName() + "  " + method.getName());
         if(cache == null || cache.skip()) {
             return joinPoint.proceed();
         }
@@ -53,7 +52,10 @@ public class ECCacheAspect {
         return cacheQuery(joinPoint);
     }
 
-    private Map<Class<?>, Set<String>> getTableRowKeys(ECCache cache, ProceedingJoinPoint joinPoint, Method method) throws Exception {
+    private Map<Class<?>, Set<String>> getTableRowKeys(ECCache cache, ProceedingJoinPoint joinPoint, boolean query) throws Exception {
+        MethodSignature methodSignature = (MethodSignature) joinPoint.getSignature();
+        Method method = methodSignature.getMethod();
+
         boolean byIdMethodFlag = false;
         String methodName = method.getName();
         for (String mname : byIdMethod) {
@@ -63,23 +65,49 @@ public class ECCacheAspect {
             }
         }
 
-        method.getParameterAnnotations();
-
+        ECCacheParam[] cacheAnnotations = getMethodArgsWithAnnotation(methodSignature);
 
         Map<Class<?>, Set<String>> tableCacheKey = getTableCacheKey(cache);
 
         Map<Class<?>, Set<String>> tableRowKeys = new HashMap<>();
         Object[] args = joinPoint.getArgs();
+        int argsLength = args.length;
+
         for (Class<?> cacheClass : cache.value()) {
             Set<String> rowKeys = new HashSet<>();
-            for (Object arg : args) {
-                rowKeys.addAll(fetchFieldValueList(arg, cacheClass, tableCacheKey, byIdMethodFlag));
+            for (int i = 0; i < argsLength; i++) {
+                rowKeys.addAll(fetchFieldValueList(args[i], cacheClass, tableCacheKey, byIdMethodFlag, cacheAnnotations[i], query));
             }
             if(rowKeys.size() > 0) {
                 tableRowKeys.put(cacheClass, rowKeys);
             }
         }
         return tableRowKeys;
+    }
+
+    private ECCacheParam[] getMethodArgsWithAnnotation(MethodSignature methodSignature) {
+        Method method = methodSignature.getMethod();
+        String[] names = methodSignature.getParameterNames();
+        Annotation[][] annotations = method.getParameterAnnotations();
+
+        int nameLength = names.length;
+        ECCacheParam[] cacheAnnotations = new ECCacheParam[nameLength];
+        for (Annotation[] annotation : annotations) {
+            for (Annotation annotation1 : annotation) {
+                if(! ECCacheParam.class.isAssignableFrom(annotation1.getClass())) {
+                    continue;
+                }
+                ECCacheParam ecCacheParam = (ECCacheParam) annotation1;
+                for (int i = 0; i < nameLength; i++) {
+                    if(names[i].equals(ecCacheParam.value())) {
+                        cacheAnnotations[i] = ecCacheParam;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        return cacheAnnotations;
     }
 
     private Map<Class<?>, Set<String>> getTableCacheKey(ECCache cache) {
@@ -113,7 +141,7 @@ public class ECCacheAspect {
         return getField(fieldName, clazz.getSuperclass());
     }
 
-    private Set<String> fetchFieldValueList(Object arg, Class<?> tmpCacheClass, Map<Class<?>, Set<String>> tableCacheKey, boolean byIdMethodFlag) throws Exception {
+    private Set<String> fetchFieldValueList(Object arg, Class<?> tmpCacheClass, Map<Class<?>, Set<String>> tableCacheKey, boolean byIdMethodFlag, ECCacheParam ecCacheParam, boolean query) throws Exception {
         Set<String> rowKeys = new HashSet<>();
         Set<String> cacheField = tableCacheKey.get(tmpCacheClass);
         if(cacheField == null) {
@@ -125,24 +153,45 @@ public class ECCacheAspect {
                 fieldObject.setAccessible(true);
                 Object fieldValue = fieldObject.get(arg);
                 if(fieldValue == null) {
-                    continue;
+                    if(query) {
+                        continue;
+                    }else{
+                        rowKeys.clear();
+                        break;
+                    }
                 }
                 rowKeys.add(field + "_" + fieldValue);
             }
             return rowKeys;
-        } else if (Number.class.isAssignableFrom(arg.getClass())) {
-            if(byIdMethodFlag && cacheField.contains("id")) {
-                rowKeys.add("id" + "_" + arg);
+        } else if (Number.class.isAssignableFrom(arg.getClass()) || String.class.isAssignableFrom(arg.getClass()) || arg.getClass().isPrimitive()) {
+            if(byIdMethodFlag) {
+                if(cacheField.size() == 1 && cacheField.contains("id")) {
+                    rowKeys.add("id" + "_" + arg);
+                }
+            }else if(ecCacheParam != null && cacheField.contains(ecCacheParam.value())) {
+                if(ecCacheParam.clazz() == void.class || ecCacheParam.clazz() == tmpCacheClass) {
+                    rowKeys.add(ecCacheParam.value() + "_" + arg);
+                }
             }
         } else if (arg.getClass().isArray()) {
             Object[] tmpArgs = (Object[]) arg;
             for (Object tmpArg : tmpArgs) {
-                rowKeys.addAll(fetchFieldValueList(tmpArg, tmpCacheClass, tableCacheKey, byIdMethodFlag));
+                Set<String> tmpRowKeys = fetchFieldValueList(tmpArg, tmpCacheClass, tableCacheKey, byIdMethodFlag, ecCacheParam, query);
+                if(tmpRowKeys.size() == 0 && ! query) {
+                    rowKeys.clear();
+                    break;
+                }
+                rowKeys.addAll(tmpRowKeys);
             }
         } else if (Collection.class.isAssignableFrom(arg.getClass())) {
             Collection<?> tmpArgs = (Collection<?>) arg;
             for (Object tmpArg : tmpArgs) {
-                rowKeys.addAll(fetchFieldValueList(tmpArg, tmpCacheClass, tableCacheKey, byIdMethodFlag));
+                Set<String> tmpRowKeys = fetchFieldValueList(tmpArg, tmpCacheClass, tableCacheKey, byIdMethodFlag, ecCacheParam, query);
+                if(tmpRowKeys.size() == 0 && ! query) {
+                    rowKeys.clear();
+                    break;
+                }
+                rowKeys.addAll(tmpRowKeys);
             }
         } else {
             System.out.println("none cache key...");
@@ -161,11 +210,12 @@ public class ECCacheAspect {
             if(cache == null) {
                 cache = clazz.getAnnotation(ECCache.class);
             }
-            tableRowKeys = getTableRowKeys(cache, joinPoint, method);
-//            System.out.println(tableRowKeys);
-            System.out.println("--------------------cacheUpdate--------------------");
+//            System.out.println("--------------------cacheUpdate--------------------");
+            tableRowKeys = getTableRowKeys(cache, joinPoint, false);
+//            System.out.println("刷新版本："+tableRowKeys);
         } catch (Exception e) {
             e.printStackTrace();
+            logger.error("cacheUpdate", e);
         }
         Object data = joinPoint.proceed();
         try {
@@ -181,11 +231,12 @@ public class ECCacheAspect {
                         cacheVersions.put(rowkey, version);
                     }
                 }
-                cacheVersions.put("tableVersion", version);
+                cacheVersions.put(TABLE_VERSION_KEY, version);
                 CacheUtils.hmset(key.getName(), cacheVersions);
             }
         } catch (Exception e) {
             e.printStackTrace();
+            logger.error("cacheUpdate", e);
         }
         return data;
     }
@@ -197,6 +248,9 @@ public class ECCacheAspect {
         Map<Class<?>, Map<String, Object>> dataVersions = new LinkedHashMap<>();
         try {
             MethodSignature methodSignature = (MethodSignature) joinPoint.getSignature();
+            if(methodSignature.getReturnType() == void.class) {
+                return joinPoint.proceed();
+            }
             Method method = methodSignature.getMethod();
             cache = method.getAnnotation(ECCache.class);
             Class<?> clazz = joinPoint.getTarget().getClass();
@@ -206,11 +260,9 @@ public class ECCacheAspect {
             if(cache == null || cache.skip()) {
                 return joinPoint.proceed();
             }
-
-            tableRowKeys = getTableRowKeys(cache, joinPoint, method);
-
-            System.out.println("--------------------cacheQuery--------------------");
-//            System.out.println(tableRowKeys);
+//            System.out.println("--------------------cacheQuery--------------------");
+            tableRowKeys = getTableRowKeys(cache, joinPoint, true);
+//            System.out.println("刷新版本："+tableRowKeys);
 
             Object[] args = joinPoint.getArgs();
             int argsLength = args.length;
@@ -218,8 +270,7 @@ public class ECCacheAspect {
             for (int i = 0; i < argsLength; i++) {
                 argsArray[i] = ObjectAnalyzerUtils.objectToString(args[i]);
             }
-            hashKey = clazz.getSimpleName() + "_" + method.getName() + "_" + Arrays.toString(argsArray);
-            hashKey = clazz.getSimpleName() + "_"  + EncryptUtils.md5(hashKey);
+            hashKey = clazz.getSimpleName() + "_"  + EncryptUtils.md5(method.getName() + "_" + Arrays.toString(argsArray));
 
             Class<?>[] keys = cache.value();
             for (Class<?> key : keys) {
@@ -230,9 +281,9 @@ public class ECCacheAspect {
                         cacheVersionKeys.add(rowkey);
                     }
                 }else{
-                    cacheVersionKeys.add("tableVersion");
+                    cacheVersionKeys.add(TABLE_VERSION_KEY);
                 }
-                List<Object> list = CacheUtils.hmget(key.getName(), cacheVersionKeys);
+                List<Object> list = RedisUtils.hmget(key.getName(), cacheVersionKeys);
                 Map<String, Object> cacheVersions = new LinkedHashMap<>();
                 int size = cacheVersionKeys.size();
                 for (int i = 0; i < size; i++) {
@@ -241,11 +292,11 @@ public class ECCacheAspect {
                 if(cacheVersions.containsValue(null)) {
                     Map<String, Object> cacheVersionMap = new HashMap<>();
                     Object tableVersion = null;
-                    if(cacheVersions.get("tableVersion") != null) {
-                        tableVersion = cacheVersions.get("tableVersion");
+                    if(cacheVersions.get(TABLE_VERSION_KEY) != null) {
+                        tableVersion = cacheVersions.get(TABLE_VERSION_KEY);
                     }else{
                         tableVersion = System.currentTimeMillis();
-                        cacheVersionMap.put("tableVersion", tableVersion);
+                        cacheVersionMap.put(TABLE_VERSION_KEY, tableVersion);
                     }
                     for (String fieldKey : cacheVersions.keySet()) {
                         if(cacheVersions.get(fieldKey) == null) {
@@ -253,34 +304,39 @@ public class ECCacheAspect {
                         }
                         cacheVersionMap.put(fieldKey, tableVersion);
                     }
-                    CacheUtils.hmset(key.getName(), cacheVersionMap);
-                    System.out.println("========================");
+                    RedisUtils.hmset(key.getName(), cacheVersionMap);
+//                    System.out.println("========================");
                 }
                 dataVersions.put(key, cacheVersions);
             }
 //            System.out.println(dataVersions);
-            Object value = CacheUtils.get(hashKey);
+            Object value = RedisUtils.get(hashKey);
             if(value != null && value instanceof Map) {
                 Map<String, Object> cacheData = (Map<String, Object>) value;
                 if(cacheData.containsKey("version") && cacheData.containsKey("data")) {
                     Map<String, Object> version = (Map<String, Object>) cacheData.get("version");
                     if(dataVersions.toString().equals(version.toString())) {
-                        System.out.println("cached ....");
+//                        System.out.println("cached ....");
                         return cacheData.get("data");
                     }
                 }
             }
-        } catch (Throwable throwable) {
-            throwable.printStackTrace();
+        } catch (Throwable e) {
+            hashKey = null;
+            e.printStackTrace();
+            logger.error("cacheQuery", e);
         }
         Object data = joinPoint.proceed();
         try {
-            Map<String, Object> cacheData = new HashMap<>();
-            cacheData.put("data", data);
-            cacheData.put("version", dataVersions);
-            CacheUtils.set(hashKey, cacheData, cache.expire());
+            if(hashKey != null && dataVersions != null) {
+                Map<String, Object> cacheData = new HashMap<>();
+                cacheData.put("data", data);
+                cacheData.put("version", dataVersions);
+                RedisUtils.set(hashKey, cacheData, cache.expire());
+            }
         } catch (Exception e) {
             e.printStackTrace();
+            logger.error("cacheQuery", e);
         }
         return data;
     }

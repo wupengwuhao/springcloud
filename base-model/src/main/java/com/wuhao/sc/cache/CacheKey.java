@@ -11,7 +11,7 @@ public @interface CacheKey {
 
 	boolean required() default true;
 
-	String[] keys();
+	String[] value();
 
 	KEYTYPE type() default KEYTYPE.OR;
 

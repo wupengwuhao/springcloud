@@ -25,6 +25,7 @@
         <module>config-server</module>
         <module>service-cache</module>
         <module>redis-utils</module>
+        <module>base-model</module>
     </modules>
 
     <properties>
