@@ -8,6 +8,8 @@ eureka:
     serviceUrl:
       defaultZone: http://eureka.ms.com:18761/eureka/
 zuul:
+  sensitive-headers: Cookie,Set-Cookie,Authorization
+  ignoredServices: Cookie,Set-Cookie,Authorization
   routes:
     api-ribbon:
       path: /api-ribbon/**
