@@ -3,6 +3,13 @@ server:
 spring:
   application:
     name: service-zuul
+  datasource:
+    type: com.alibaba.druid.pool.DruidDataSource
+    driverClassName: com.mysql.jdbc.Driver
+    url: jdbc:mysql://10.20.240.9:3306/springcloud
+    username: root
+    password: UbtSHppzQLKN6XeZ
+
 eureka:
   client:
     serviceUrl:
@@ -23,10 +30,3 @@ eureka:
 #     api-feign:
 #       path: /api-feign/**
 #       serviceId: service-feign
-
-# 主数据源，默认的
-spring.datasource.type=com.alibaba.druid.pool.DruidDataSource
-spring.datasource.driverClassName=com.mysql.jdbc.Driver
-spring.datasource.url=jdbc:mysql://10.20.240.9:3306/springcloud
-spring.datasource.username=root
-spring.datasource.password=UbtSHppzQLKN6XeZ
